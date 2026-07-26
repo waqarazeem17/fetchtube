@@ -16,30 +16,41 @@ Future<Map<String, dynamic>> _call(String method, [Map<String, dynamic>? args]) 
     final out = await _channel.invokeMethod<String>(method, args);
     return jsonDecode(out!) as Map<String, dynamic>;
   } on PlatformException catch (e) {
-    throw YtDlpException(_humanize(e.message ?? ''));
+    throw YtDlpException(humanizeYtDlpError(e.message ?? ''));
   }
 }
 
 /// yt-dlp writes the real reason to stderr; surface it instead of "Error".
-String _humanize(String raw) {
+/// Order matters. yt-dlp wraps specific causes inside generic wording — a stale link
+/// arrives as "unable to download video data: HTTP Error 403", so the generic
+/// connectivity check must come last or it swallows everything.
+String humanizeYtDlpError(String raw) {
   final lower = raw.toLowerCase();
-  if (lower.contains('unable to download') || lower.contains('failed to resolve')) {
-    return 'No internet connection.';
-  }
   if (lower.contains('private video')) return 'This video is private.';
   if (lower.contains('video unavailable')) return 'This video is unavailable.';
   if (lower.contains('not available in your country')) {
     return 'This video is blocked in your region.';
   }
   if (lower.contains('unsupported url')) return 'That link is not supported.';
-  // Both observed on-device: YouTube rate-limits an IP, then demands sign-in.
-  if (lower.contains('429') || lower.contains('too many requests')) {
-    return 'The source is rate-limiting this network. Try again in a few minutes.';
-  }
+  // Observed on-device: YouTube rate-limits an IP, then demands sign-in.
   if (lower.contains("confirm you're not a bot") ||
       lower.contains('confirm you’re not a bot')) {
     return 'The source blocked this request as automated. '
         'This often happens on VPNs and shared networks.';
+  }
+  if (lower.contains('429') || lower.contains('too many requests')) {
+    return 'The source is rate-limiting this network. Try again in a few minutes.';
+  }
+  // Media URLs are short-lived; a 403 means this one went stale and re-extracting fixes it.
+  if (lower.contains('403') || lower.contains('forbidden')) {
+    return 'That download link expired. Tap retry to fetch a fresh one.';
+  }
+  // Genuine connectivity only: no host, no route, or a timeout.
+  if (lower.contains('failed to resolve') ||
+      lower.contains('no address associated') ||
+      lower.contains('network is unreachable') ||
+      lower.contains('timed out')) {
+    return 'No internet connection.';
   }
   // Keep yt-dlp's own last line — it is usually the most specific thing we have.
   final line = raw.trim().split('\n').lastWhere((l) => l.trim().isNotEmpty, orElse: () => raw);
@@ -50,7 +61,7 @@ Future<String> ytDlpVersion() async {
   try {
     return await _channel.invokeMethod<String>('version') ?? 'unknown';
   } on PlatformException catch (e) {
-    throw YtDlpException(_humanize(e.message ?? ''));
+    throw YtDlpException(humanizeYtDlpError(e.message ?? ''));
   }
 }
 

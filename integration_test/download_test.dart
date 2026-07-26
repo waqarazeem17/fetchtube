@@ -59,16 +59,19 @@ void main() {
         .where((d) => d.id == id && d.status == 'running' && d.progress > 0)
         .first
         .timeout(const Duration(minutes: 2));
-    await pauseDownload(id);
-
-    final paused = await downloadEvents()
+    // Arm the listener before acting: downloadEvents() is a broadcast stream, so an
+    // event fired before we subscribe is gone for good.
+    final pausedEvent = downloadEvents()
         .where((d) => d.id == id && d.status == 'paused')
         .first
         .timeout(const Duration(seconds: 60));
+    await pauseDownload(id);
+    final paused = await pausedEvent;
     expect(paused.progress, greaterThan(0));
 
+    final settled = _settle(id);
     await resumeDownload(id, request);
-    final result = await _settle(id);
+    final result = await settled;
     expect(result.status, 'done', reason: result.error ?? '');
     expect(result.uri, startsWith('content://'));
   }, timeout: const Timeout(Duration(minutes: 8)));

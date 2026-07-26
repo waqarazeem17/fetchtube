@@ -37,6 +37,36 @@ void main() {
     });
   });
 
+  // Every string here is an error actually observed on-device.
+  group('error messages', () {
+    test('a stale link is not reported as a network outage', () {
+      // yt-dlp nests the real cause inside generic wording; specific must win.
+      expect(
+        humanizeYtDlpError('ERROR: unable to download video data: HTTP Error 403: Forbidden'),
+        contains('expired'),
+      );
+    });
+
+    test('rate limiting and bot checks are distinguished', () {
+      expect(humanizeYtDlpError('HTTP Error 429: Too Many Requests'),
+          contains('rate-limiting'));
+      expect(
+        humanizeYtDlpError("ERROR: Sign in to confirm you're not a bot."),
+        contains('automated'),
+      );
+    });
+
+    test('real connectivity failures still map to no internet', () {
+      expect(humanizeYtDlpError('[Errno 7] No address associated with hostname'),
+          'No internet connection.');
+    });
+
+    test('an unrecognised error keeps yt-dlp own wording, minus the prefix', () {
+      expect(humanizeYtDlpError('ERROR: Postprocessing: Conversion failed!'),
+          'Postprocessing: Conversion failed!');
+    });
+  });
+
   group('history', () {
     HistoryEntry entry(String id, {bool audio = false}) => HistoryEntry(
           id: id,

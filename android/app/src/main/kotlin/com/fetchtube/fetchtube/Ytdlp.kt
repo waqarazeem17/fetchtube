@@ -15,18 +15,30 @@ object Ytdlp {
 
     @Synchronized
     fun ensureInit(context: Context) {
-        if (ready) return
-        YoutubeDL.getInstance().init(context)
-        FFmpeg.getInstance().init(context)
-        // The yt-dlp bundled in the AAR is ~2 years stale and YouTube already rejects its
-        // format requests, so a first-run self-update is required, not an optimisation.
-        // version() is null until an update lands, which makes it the "have we updated" flag.
-        if (YoutubeDL.getInstance().version(context) == null) {
-            // ponytail: updates only once, on first run. yt-dlp rots in weeks — add a
-            // periodic/manual re-check once Settings exists.
+        if (!ready) {
+            // Unpacking python/ffmpeg is mandatory; if this throws there is nothing to run.
+            YoutubeDL.getInstance().init(context)
+            FFmpeg.getInstance().init(context)
+            ready = true
+        }
+        // Retried on later calls so a failed first update heals itself.
+        updateIfStale(context)
+    }
+
+    /**
+     * The yt-dlp bundled in the AAR is ~2 years old and YouTube rejects its format
+     * requests, so a first-run update matters. It is still best-effort: a failed update
+     * must not brick the app, because the unpacked copy can already search and often
+     * download. version() is null until an update lands, so it doubles as the flag.
+     *
+     * ponytail: updates once, on first success. yt-dlp rots in weeks — add a periodic
+     * and manual re-check once Settings exists.
+     */
+    private fun updateIfStale(context: Context) {
+        if (YoutubeDL.getInstance().version(context) != null) return
+        runCatching {
             YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
         }
-        ready = true
     }
 
     fun version(context: Context): String =

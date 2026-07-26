@@ -100,14 +100,17 @@ class DownloadService : Service() {
         val formatId = intent.getStringExtra("formatId")
         val audioFormat = intent.getStringExtra("audioFormat")
 
-        cancelled.remove(id)
+        // Identifies this attempt. Pausing or cancelling drops the token, so a task that
+        // is still unwinding cannot report "failed" over a newer attempt's state.
+        val token = Any()
+        tokens[id] = token
         val state = Downloads.states[id] ?: DownloadState(id, title, audioFormat != null)
         state.status = "queued"
         state.error = null
         Downloads.put(state)
 
         queue.execute {
-            if (cancelled.contains(id)) return@execute
+            if (tokens[id] !== token) return@execute
             val dir = File(cacheDir, "dl/$id")
             try {
                 state.status = "running"
@@ -125,7 +128,7 @@ class DownloadService : Service() {
                     Downloads.emit(state)
                     notify(state)
                 }
-                if (cancelled.contains(id)) return@execute
+                if (tokens[id] !== token) return@execute
                 val file = dir.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
                     ?: throw IllegalStateException("yt-dlp produced no output file")
                 state.bytes = file.length()
@@ -136,12 +139,20 @@ class DownloadService : Service() {
                 dir.deleteRecursively()
                 notifyDone(state)
             } catch (e: Exception) {
-                if (cancelled.contains(id)) return@execute
+                // Pause/cancel kills the process, which surfaces here as an exception.
+                // Only report it if this attempt is still the current one.
+                if (tokens[id] !== token) return@execute
                 state.status = "failed"
                 state.error = e.message ?: e.toString()
             } finally {
-                Downloads.emit(state)
-                if (Downloads.states.values.none { it.status == "running" || it.status == "queued" }) {
+                if (tokens[id] === token) {
+                    tokens.remove(id)
+                    Downloads.emit(state)
+                }
+                if (Downloads.states.values.none {
+                        it.status == "running" || it.status == "queued"
+                    }
+                ) {
                     stopSelf()
                 }
             }
@@ -150,7 +161,9 @@ class DownloadService : Service() {
 
     /** Kills the yt-dlp process. Partial files stay on disk so "paused" can resume. */
     private fun stop(id: String, status: String) {
-        cancelled.add(id)
+        // Drop the token first: the task is about to throw, and this is what tells it
+        // the failure was deliberate rather than a real error.
+        tokens.remove(id)
         Ytdlp.cancel(id)
         Downloads.states[id]?.let {
             it.status = status
@@ -224,7 +237,9 @@ class DownloadService : Service() {
         // ponytail: serial queue — one transfer at a time. Concurrency is a Settings knob
         // (Phase 12); widen to a fixed pool when that lands.
         private val queue = Executors.newSingleThreadExecutor()
-        private val cancelled = ConcurrentHashMap.newKeySet<String>()
+
+        /** Current attempt per download id. See [enqueue]. */
+        private val tokens = ConcurrentHashMap<String, Any>()
 
         private const val CHANNEL_ID = "downloads"
         private const val NOTIF_ID = 1
@@ -232,10 +247,25 @@ class DownloadService : Service() {
         const val ACTION_CANCEL = "cancel"
         const val ACTION_PAUSE = "pause"
 
-        fun send(context: Context, action: String, extras: Map<String, String?>) {
+        /**
+         * Returns null on success, or a user-facing reason on failure.
+         *
+         * Android 12+ refuses startForegroundService() while the app is in the
+         * background (screen off counts), and the exception is fatal if it escapes —
+         * it used to take the whole app down. Pause/cancel only ever target a service
+         * that is already running, so they use the plain start.
+         */
+        fun send(context: Context, action: String, extras: Map<String, String?>): String? {
             val intent = Intent(context, DownloadService::class.java).setAction(action)
             extras.forEach { (k, v) -> intent.putExtra(k, v) }
-            context.startForegroundService(intent)
+            return try {
+                if (action == ACTION_ENQUEUE) context.startForegroundService(intent)
+                else context.startService(intent)
+                null
+            } catch (e: Exception) {
+                "Downloads can't start while FetchTube is in the background. " +
+                    "Open the app and try again."
+            }
         }
 
         private val SPEED = Regex("""at\s+([\d.]+\s*[KMG]?i?B/s)""")

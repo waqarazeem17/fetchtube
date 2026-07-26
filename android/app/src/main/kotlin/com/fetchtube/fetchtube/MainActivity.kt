@@ -28,9 +28,9 @@ class MainActivity : FlutterActivity() {
                 // Queue mutations are cheap and must not be reordered behind a metadata
                 // fetch, so they answer on the main thread.
                 when (call.method) {
-                    "download" -> {
-                        val id = System.nanoTime().toString()
-                        DownloadService.send(
+                    "download", "retry", "resume" -> {
+                        val id = call.argument<String>("id") ?: System.nanoTime().toString()
+                        val failure = DownloadService.send(
                             this, DownloadService.ACTION_ENQUEUE,
                             mapOf(
                                 "id" to id,
@@ -40,22 +40,8 @@ class MainActivity : FlutterActivity() {
                                 "audioFormat" to call.argument<String>("audioFormat"),
                             ),
                         )
-                        result.success(id)
-                        return@setMethodCallHandler
-                    }
-                    "retry", "resume" -> {
-                        val id = call.argument<String>("id")!!
-                        DownloadService.send(
-                            this, DownloadService.ACTION_ENQUEUE,
-                            mapOf(
-                                "id" to id,
-                                "url" to call.argument<String>("url"),
-                                "title" to call.argument<String>("title"),
-                                "formatId" to call.argument<String>("formatId"),
-                                "audioFormat" to call.argument<String>("audioFormat"),
-                            ),
-                        )
-                        result.success(null)
+                        if (failure == null) result.success(id)
+                        else result.error("service", failure, null)
                         return@setMethodCallHandler
                     }
                     // Where Dart keeps its history file. Avoids a path_provider dependency
@@ -93,11 +79,15 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
                     "pause", "cancel" -> {
+                        val id = call.argument<String>("id")!!
                         val action = if (call.method == "pause") DownloadService.ACTION_PAUSE
                         else DownloadService.ACTION_CANCEL
-                        DownloadService.send(this, action, mapOf("id" to call.argument("id")))
-                        if (call.method == "cancel") Downloads.remove(call.argument("id")!!)
-                        result.success(null)
+                        val failure = DownloadService.send(this, action, mapOf("id" to id))
+                        if (call.method == "cancel") Downloads.remove(id)
+                        // Do not swallow this: a rejected service start used to make Pause
+                        // silently do nothing, leaving the UI stuck on "running".
+                        if (failure == null) result.success(null)
+                        else result.error("service", failure, null)
                         return@setMethodCallHandler
                     }
                 }
