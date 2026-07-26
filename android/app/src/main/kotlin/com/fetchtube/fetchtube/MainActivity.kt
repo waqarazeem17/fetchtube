@@ -1,0 +1,159 @@
+package com.fetchtube.fetchtube
+
+import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.net.toUri
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
+
+private const val CHANNEL = "fetchtube/ytdlp"
+private const val EVENTS = "fetchtube/downloads"
+
+class MainActivity : FlutterActivity() {
+    // yt-dlp calls block on a child process, so they never touch the main thread.
+    private val io = Executors.newSingleThreadExecutor()
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        requestNotificationPermission()
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+            .setMethodCallHandler { call, result ->
+                // Queue mutations are cheap and must not be reordered behind a metadata
+                // fetch, so they answer on the main thread.
+                when (call.method) {
+                    "download" -> {
+                        val id = System.nanoTime().toString()
+                        DownloadService.send(
+                            this, DownloadService.ACTION_ENQUEUE,
+                            mapOf(
+                                "id" to id,
+                                "url" to call.argument<String>("url"),
+                                "title" to call.argument<String>("title"),
+                                "formatId" to call.argument<String>("formatId"),
+                                "audioFormat" to call.argument<String>("audioFormat"),
+                            ),
+                        )
+                        result.success(id)
+                        return@setMethodCallHandler
+                    }
+                    "retry", "resume" -> {
+                        val id = call.argument<String>("id")!!
+                        DownloadService.send(
+                            this, DownloadService.ACTION_ENQUEUE,
+                            mapOf(
+                                "id" to id,
+                                "url" to call.argument<String>("url"),
+                                "title" to call.argument<String>("title"),
+                                "formatId" to call.argument<String>("formatId"),
+                                "audioFormat" to call.argument<String>("audioFormat"),
+                            ),
+                        )
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    // Where Dart keeps its history file. Avoids a path_provider dependency
+                    // for the one path we need.
+                    "dataDir" -> {
+                        result.success(filesDir.absolutePath)
+                        return@setMethodCallHandler
+                    }
+                    "open", "share" -> {
+                        val uri = call.argument<String>("uri")!!.toUri()
+                        val type = contentResolver.getType(uri) ?: "*/*"
+                        val intent = if (call.method == "open") {
+                            Intent(Intent.ACTION_VIEW).setDataAndType(uri, type)
+                        } else {
+                            Intent(Intent.ACTION_SEND).setType(type)
+                                .putExtra(Intent.EXTRA_STREAM, uri)
+                        }
+                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        try {
+                            startActivity(
+                                if (call.method == "share") Intent.createChooser(intent, null)
+                                else intent
+                            )
+                            result.success(null)
+                        } catch (e: ActivityNotFoundException) {
+                            result.error("noapp", "No app can open this file", null)
+                        }
+                        return@setMethodCallHandler
+                    }
+                    "delete" -> {
+                        val uri = call.argument<String>("uri")!!.toUri()
+                        val rows = runCatching { contentResolver.delete(uri, null, null) }
+                            .getOrDefault(0)
+                        result.success(rows > 0)
+                        return@setMethodCallHandler
+                    }
+                    "pause", "cancel" -> {
+                        val action = if (call.method == "pause") DownloadService.ACTION_PAUSE
+                        else DownloadService.ACTION_CANCEL
+                        DownloadService.send(this, action, mapOf("id" to call.argument("id")))
+                        if (call.method == "cancel") Downloads.remove(call.argument("id")!!)
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                }
+
+                io.execute {
+                    try {
+                        // Unpacking python/ffmpeg must happen before anything reads them;
+                        // the first call after install pays the cost.
+                        Ytdlp.ensureInit(this)
+                        val out = when (call.method) {
+                            "version" -> Ytdlp.version(this)
+                            "search" -> Ytdlp.json(
+                                this,
+                                "ytsearch${call.argument<Int>("limit") ?: 20}:${call.argument<String>("query")}",
+                                "--flat-playlist",
+                            )
+                            "info" -> Ytdlp.json(this, call.argument<String>("url")!!)
+                            else -> {
+                                runOnUiThread { result.notImplemented() }
+                                return@execute
+                            }
+                        }
+                        runOnUiThread { result.success(out) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("ytdlp", e.message, null) }
+                    }
+                }
+            }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENTS).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
+                    // Replay so a reopened UI shows downloads that ran while it was gone.
+                    Downloads.snapshot().forEach { runOnUiThread { sink?.success(it) } }
+                    Downloads.listener = { runOnUiThread { sink?.success(it) } }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    Downloads.listener = null
+                }
+            },
+        )
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+    }
+
+    override fun onDestroy() {
+        Downloads.listener = null
+        io.shutdown()
+        super.onDestroy()
+    }
+}
