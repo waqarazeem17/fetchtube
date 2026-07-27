@@ -72,6 +72,12 @@ class History {
   List<HistoryEntry> where({required bool audio}) =>
       _entries.where((e) => e.audio == audio).toList();
 
+  int countOf({required bool audio}) => where(audio: audio).length;
+
+  /// Bytes held on this device for one media type. Drives the home tiles.
+  int bytesOf({required bool audio}) => where(audio: audio)
+      .fold(0, (sum, e) => sum + (e.bytes > 0 ? e.bytes : 0));
+
   Future<void> load() async {
     final dir = await dataDir();
     if (dir.isEmpty) return;

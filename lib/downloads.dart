@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'history.dart';
+import 'player.dart';
+import 'theme.dart';
 import 'ytdlp.dart';
 
 /// Holds download state for the whole app. The native side is the source of truth;
@@ -77,15 +79,21 @@ class DownloadStore extends ChangeNotifier {
 }
 
 class DownloadsScreen extends StatelessWidget {
-  const DownloadsScreen({super.key});
+  /// Which tab to land on — set by the home screen's quick access tiles.
+  final bool initialAudio;
+  const DownloadsScreen({super.key, this.initialAudio = false});
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
         length: 2,
+        initialIndex: initialAudio ? 1 : 0,
         child: Scaffold(
           appBar: AppBar(
-            title: const Text('Downloads'),
-            bottom: const TabBar(tabs: [Tab(text: 'Videos'), Tab(text: 'Music')]),
+            title: const Text('Library', style: kWordmarkStyle),
+            bottom: const TabBar(
+              tabs: [Tab(text: 'Videos'), Tab(text: 'Music')],
+              indicatorSize: TabBarIndicatorSize.tab,
+            ),
           ),
           body: ListenableBuilder(
             listenable: DownloadStore.instance,
@@ -119,29 +127,36 @@ class _SavedTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
-        leading: e.thumbnail == null
-            ? Icon(e.audio ? Icons.music_note : Icons.movie)
-            : ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.network(e.thumbnail!,
-                    width: 64,
-                    height: 40,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) =>
-                        Icon(e.audio ? Icons.music_note : Icons.movie)),
-              ),
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 64,
+            height: 44,
+            child: e.thumbnail == null
+                ? _placeholder(e)
+                : Image.network(e.thumbnail!,
+                    fit: BoxFit.cover, errorBuilder: (_, _, _) => _placeholder(e)),
+          ),
+        ),
         title: Text(e.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        subtitle: Text(e.subtitle),
-        onTap: () => _open(context),
+        subtitle: Text(
+          e.subtitle,
+          style: kNumericStyle.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        onTap: () => _play(context),
         trailing: PopupMenuButton<String>(
           onSelected: (v) => switch (v) {
+            'play' => _play(context),
             'open' => _open(context),
             'share' => shareFile(e.uri),
             'info' => _info(context),
             _ => _delete(context),
           },
           itemBuilder: (_) => const [
-            PopupMenuItem(value: 'open', child: Text('Play')),
+            PopupMenuItem(value: 'play', child: Text('Play')),
+            PopupMenuItem(value: 'open', child: Text('Open with…')),
             PopupMenuItem(value: 'share', child: Text('Share')),
             PopupMenuItem(value: 'info', child: Text('File information')),
             PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -149,6 +164,21 @@ class _SavedTile extends StatelessWidget {
         ),
       );
 
+  Widget _placeholder(HistoryEntry e) {
+    final accent = accentFor(audio: e.audio);
+    return Container(
+      color: accent.withValues(alpha: 0.14),
+      child: Icon(e.audio ? Icons.music_note : Icons.movie_outlined,
+          color: accent, size: 18),
+    );
+  }
+
+  void _play(BuildContext context) => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => PlayerScreen(entry: e)),
+      );
+
+  /// Hand off to whatever the user already uses for media.
   Future<void> _open(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
