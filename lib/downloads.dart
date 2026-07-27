@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'history.dart';
 import 'player.dart';
+import 'settings.dart';
 import 'theme.dart';
 import 'ytdlp.dart';
 
@@ -22,18 +23,20 @@ class DownloadStore extends ChangeNotifier {
   /// Completed downloads move into history so they survive a restart.
   Future<void> _record(Download d) async {
     final request = _requests[d.id];
-    await History.instance.add(HistoryEntry(
-      id: d.id,
-      title: d.title,
-      uri: d.uri!,
-      filename: d.filename ?? d.title,
-      thumbnail: request?.thumbnail,
-      quality: request?.quality,
-      source: request?.url,
-      audio: d.audio,
-      bytes: d.bytes,
-      date: DateTime.now(),
-    ));
+    await History.instance.add(
+      HistoryEntry(
+        id: d.id,
+        title: d.title,
+        uri: d.uri!,
+        filename: d.filename ?? d.title,
+        thumbnail: request?.thumbnail,
+        quality: request?.quality,
+        source: request?.url,
+        audio: d.audio,
+        bytes: d.bytes,
+        date: DateTime.now(),
+      ),
+    );
     notifyListeners();
   }
 
@@ -43,20 +46,32 @@ class DownloadStore extends ChangeNotifier {
   final _requests = <String, DownloadRequest>{};
 
   List<Download> get all => [
-        for (final id in _order)
-          if (_items[id] != null) _items[id]!,
-      ];
+    for (final id in _order)
+      if (_items[id] != null) _items[id]!,
+  ];
 
   int get activeCount => _items.values.where((d) => d.active).length;
 
+  QueueOptions get _options {
+    final s = Settings.instance;
+    return QueueOptions(
+      wifiOnly: s.wifiOnly,
+      autoRetry: s.autoRetry,
+      notifyOnComplete: s.notifyOnComplete,
+      maxConcurrent: s.concurrentDownloads,
+    );
+  }
+
   Future<void> start(DownloadRequest request) async {
-    final id = await startDownload(request);
+    final id = await startDownload(request, _options);
     _requests[id] = request;
   }
 
+  /// Re-reads Settings on every retry, so a change (e.g. turning off Wi-Fi only)
+  /// takes effect on the next attempt, not just new downloads.
   Future<void> retry(Download d) async {
     final request = _requests[d.id];
-    if (request != null) await resumeDownload(d.id, request);
+    if (request != null) await resumeDownload(d.id, request, _options);
   }
 
   Future<void> cancel(Download d) async {
@@ -76,6 +91,19 @@ class DownloadStore extends ChangeNotifier {
     notifyListeners();
     return ok;
   }
+
+  /// Renames the file on disk via MediaStore, then updates history to match.
+  Future<bool> rename(
+    HistoryEntry entry, {
+    required String title,
+    required String filename,
+  }) async {
+    final ok = await renameFile(entry.uri, filename);
+    if (ok) {
+      await History.instance.rename(entry.id, title: title, filename: filename);
+    }
+    return ok;
+  }
 }
 
 class DownloadsScreen extends StatelessWidget {
@@ -85,38 +113,43 @@ class DownloadsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-        length: 2,
-        initialIndex: initialAudio ? 1 : 0,
-        child: Scaffold(
-          appBar: AppBar(
-            title: const Text('Library', style: kWordmarkStyle),
-            bottom: const TabBar(
-              tabs: [Tab(text: 'Videos'), Tab(text: 'Music')],
-              indicatorSize: TabBarIndicatorSize.tab,
-            ),
-          ),
-          body: ListenableBuilder(
-            listenable: DownloadStore.instance,
-            builder: (context, _) => TabBarView(
-              children: [_tab(audio: false), _tab(audio: true)],
-            ),
-          ),
+    length: 2,
+    initialIndex: initialAudio ? 1 : 0,
+    child: Scaffold(
+      appBar: AppBar(
+        title: const Text('Library', style: kWordmarkStyle),
+        bottom: const TabBar(
+          tabs: [
+            Tab(text: 'Videos'),
+            Tab(text: 'Music'),
+          ],
+          indicatorSize: TabBarIndicatorSize.tab,
         ),
-      );
+      ),
+      body: ListenableBuilder(
+        listenable: DownloadStore.instance,
+        builder: (context, _) =>
+            TabBarView(children: [_tab(audio: false), _tab(audio: true)]),
+      ),
+    ),
+  );
 
   Widget _tab({required bool audio}) {
     // In-flight transfers first, then what is already on disk.
-    final active =
-        DownloadStore.instance.all.where((d) => d.audio == audio && !d.finished);
+    final active = DownloadStore.instance.all.where(
+      (d) => d.audio == audio && !d.finished,
+    );
     final saved = History.instance.where(audio: audio);
     if (active.isEmpty && saved.isEmpty) {
       return Center(child: Text('No ${audio ? "music" : "videos"} yet.'));
     }
-    return ListView(children: [
-      for (final d in active) _DownloadTile(d),
-      if (active.isNotEmpty && saved.isNotEmpty) const Divider(height: 1),
-      for (final e in saved) _SavedTile(e),
-    ]);
+    return ListView(
+      children: [
+        for (final d in active) _DownloadTile(d),
+        if (active.isNotEmpty && saved.isNotEmpty) const Divider(height: 1),
+        for (final e in saved) _SavedTile(e),
+      ],
+    );
   }
 }
 
@@ -127,56 +160,107 @@ class _SavedTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: SizedBox(
-            width: 64,
-            height: 44,
-            child: e.thumbnail == null
-                ? _placeholder(e)
-                : Image.network(e.thumbnail!,
-                    fit: BoxFit.cover, errorBuilder: (_, _, _) => _placeholder(e)),
-          ),
-        ),
-        title: Text(e.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          e.subtitle,
-          style: kNumericStyle.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
-        ),
-        onTap: () => _play(context),
-        trailing: PopupMenuButton<String>(
-          onSelected: (v) => switch (v) {
-            'play' => _play(context),
-            'open' => _open(context),
-            'share' => shareFile(e.uri),
-            'info' => _info(context),
-            _ => _delete(context),
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'play', child: Text('Play')),
-            PopupMenuItem(value: 'open', child: Text('Open with…')),
-            PopupMenuItem(value: 'share', child: Text('Share')),
-            PopupMenuItem(value: 'info', child: Text('File information')),
-            PopupMenuItem(value: 'delete', child: Text('Delete')),
-          ],
-        ),
-      );
+    leading: ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        width: 64,
+        height: 44,
+        child: e.thumbnail == null
+            ? _placeholder(context, e)
+            : Image.network(
+                e.thumbnail!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => _placeholder(context, e),
+              ),
+      ),
+    ),
+    title: Text(e.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+    subtitle: Text(
+      e.subtitle,
+      style: kNumericStyle.copyWith(
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+    onTap: () => _play(context),
+    trailing: PopupMenuButton<String>(
+      onSelected: (v) => switch (v) {
+        'play' => _play(context),
+        'open' => _open(context),
+        'share' => shareFile(e.uri),
+        'info' => _info(context),
+        'rename' => _rename(context),
+        _ => _delete(context),
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem(value: 'play', child: Text('Play')),
+        PopupMenuItem(value: 'open', child: Text('Open with…')),
+        PopupMenuItem(value: 'share', child: Text('Share')),
+        PopupMenuItem(value: 'rename', child: Text('Rename')),
+        PopupMenuItem(value: 'info', child: Text('File information')),
+        PopupMenuItem(value: 'delete', child: Text('Delete')),
+      ],
+    ),
+  );
 
-  Widget _placeholder(HistoryEntry e) {
-    final accent = accentFor(audio: e.audio);
+  Future<void> _rename(BuildContext context) async {
+    final ext = e.filename.contains('.') ? e.filename.split('.').last : '';
+    final base = ext.isEmpty
+        ? e.filename
+        : e.filename.substring(0, e.filename.length - ext.length - 1);
+    final controller = TextEditingController(text: base);
+    final newBase = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(suffixText: ext.isEmpty ? null : '.$ext'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (newBase == null || newBase.isEmpty || newBase == base) return;
+    if (!context.mounted) return;
+    final newFilename = ext.isEmpty ? newBase : '$newBase.$ext';
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await DownloadStore.instance.rename(
+      e,
+      title: newBase,
+      filename: newFilename,
+    );
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not rename this file.')),
+      );
+    }
+  }
+
+  Widget _placeholder(BuildContext context, HistoryEntry e) {
+    final accent = accentFor(context, audio: e.audio);
     return Container(
       color: accent.withValues(alpha: 0.14),
-      child: Icon(e.audio ? Icons.music_note : Icons.movie_outlined,
-          color: accent, size: 18),
+      child: Icon(
+        e.audio ? Icons.music_note : Icons.movie_outlined,
+        color: accent,
+        size: 18,
+      ),
     );
   }
 
   void _play(BuildContext context) => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => PlayerScreen(entry: e)),
-      );
+    context,
+    MaterialPageRoute(builder: (_) => PlayerScreen(entry: e)),
+  );
 
   /// Hand off to whatever the user already uses for media.
   Future<void> _open(BuildContext context) async {
@@ -189,33 +273,39 @@ class _SavedTile extends StatelessWidget {
   }
 
   void _info(BuildContext context) => showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('File information'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            _row('Name', e.filename),
-            _row('Type', e.audio ? 'Audio' : 'Video'),
-            if (e.quality != null) _row('Quality', e.quality!),
-            if (e.bytes > 0) _row('Size', formatBytes(e.bytes)),
-            _row('Saved', '${e.date}'.split('.').first),
-            _row('Folder', 'Download/FetchTube/${e.audio ? "Music" : "Videos"}'),
-          ]),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('File information'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _row('Name', e.filename),
+          _row('Type', e.audio ? 'Audio' : 'Video'),
+          if (e.quality != null) _row('Quality', e.quality!),
+          if (e.bytes > 0) _row('Size', formatBytes(e.bytes)),
+          _row('Saved', '${e.date}'.split('.').first),
+          _row('Folder', 'Download/FetchTube/${e.audio ? "Music" : "Videos"}'),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
         ),
-      );
+      ],
+    ),
+  );
 
   static Widget _row(String label, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SizedBox(width: 78, child: Text(label)),
-          Expanded(child: Text(value, textAlign: TextAlign.end)),
-        ]),
-      );
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 78, child: Text(label)),
+        Expanded(child: Text(value, textAlign: TextAlign.end)),
+      ],
+    ),
+  );
 
   Future<void> _delete(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -255,28 +345,41 @@ class _DownloadTile extends StatelessWidget {
     final store = DownloadStore.instance;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Icon(d.audio ? Icons.music_note : Icons.movie, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(d.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(d.audio ? Icons.music_note : Icons.movie, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  d.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              ..._actions(context, store),
+            ],
           ),
-          ..._actions(context, store),
-        ]),
-        const SizedBox(height: 8),
-        if (d.active) ...[
-          LinearProgressIndicator(value: d.progress <= 0 ? null : d.progress / 100),
-          const SizedBox(height: 6),
-          Text(_subtitle(), style: Theme.of(context).textTheme.bodySmall),
-        ] else
-          Text(_subtitle(),
+          const SizedBox(height: 8),
+          if (d.active) ...[
+            LinearProgressIndicator(
+              value: d.progress <= 0 ? null : d.progress / 100,
+            ),
+            const SizedBox(height: 6),
+            Text(_subtitle(), style: Theme.of(context).textTheme.bodySmall),
+          ] else
+            Text(
+              _subtitle(),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: d.status == 'failed'
-                        ? Theme.of(context).colorScheme.error
-                        : null,
-                  )),
-      ]),
+                color: d.status == 'failed'
+                    ? Theme.of(context).colorScheme.error
+                    : null,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -296,36 +399,39 @@ class _DownloadTile extends StatelessWidget {
         final size = d.total > 0
             ? '${formatBytes(d.received)} / ${formatBytes(d.total)}'
             : '${d.progress.toStringAsFixed(0)}%';
-        final eta = d.eta > 0 ? ' · ETA ${formatDuration(Duration(seconds: d.eta))}' : '';
+        final eta = d.eta > 0
+            ? ' · ETA ${formatDuration(Duration(seconds: d.eta))}'
+            : '';
         return '$size${d.speed.isEmpty ? "" : " · ${d.speed}"}$eta';
     }
   }
 
-  List<Widget> _actions(BuildContext context, DownloadStore store) => switch (d.status) {
+  List<Widget> _actions(BuildContext context, DownloadStore store) =>
+      switch (d.status) {
         'running' || 'queued' => [
-            IconButton(
-              icon: const Icon(Icons.pause),
-              tooltip: 'Pause',
-              onPressed: () => pauseDownload(d.id),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              tooltip: 'Cancel',
-              onPressed: () => store.cancel(d),
-            ),
-          ],
+          IconButton(
+            icon: const Icon(Icons.pause),
+            tooltip: 'Pause',
+            onPressed: () => pauseDownload(d.id),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close),
+            tooltip: 'Cancel',
+            onPressed: () => store.cancel(d),
+          ),
+        ],
         'paused' || 'failed' => [
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: d.status == 'paused' ? 'Resume' : 'Retry',
-              onPressed: () => store.retry(d),
-            ),
-            IconButton(
-              icon: const Icon(Icons.close),
-              tooltip: 'Remove',
-              onPressed: () => store.cancel(d),
-            ),
-          ],
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: d.status == 'paused' ? 'Resume' : 'Retry',
+            onPressed: () => store.retry(d),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close),
+            tooltip: 'Remove',
+            onPressed: () => store.cancel(d),
+          ),
+        ],
         _ => const [],
       };
 }

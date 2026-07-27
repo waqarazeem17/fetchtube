@@ -7,12 +7,16 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.IBinder
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /** One queued or active download, as mirrored to Flutter. */
 data class DownloadState(
@@ -99,6 +103,10 @@ class DownloadService : Service() {
         val title = intent.getStringExtra("title") ?: "Download"
         val formatId = intent.getStringExtra("formatId")
         val audioFormat = intent.getStringExtra("audioFormat")
+        val wifiOnly = intent.getStringExtra("wifiOnly") == "true"
+        val autoRetry = intent.getStringExtra("autoRetry") == "true"
+        val notifyOnComplete = intent.getStringExtra("notifyOnComplete") != "false"
+        setConcurrency(intent.getStringExtra("maxConcurrent")?.toIntOrNull() ?: 1)
 
         // Identifies this attempt. Pausing or cancelling drops the token, so a task that
         // is still unwinding cannot report "failed" over a newer attempt's state.
@@ -111,52 +119,85 @@ class DownloadService : Service() {
 
         queue.execute {
             if (tokens[id] !== token) return@execute
-            val dir = File(cacheDir, "dl/$id")
-            try {
-                state.status = "running"
-                Downloads.emit(state)
-                Ytdlp.download(this, url, dir, formatId, audioFormat, id) { pct, eta, line ->
-                    state.progress = pct
-                    state.etaSeconds = eta
-                    parseSpeed(line)?.let { state.speed = it }
-                    parseTotal(line)?.let { state.totalBytes = it }
-                    // Converting/merging reports no percentage; surface it so the UI
-                    // does not look stalled at 100%.
-                    if (line.startsWith("[Merger]") || line.startsWith("[ExtractAudio]")) {
-                        state.status = "converting"
-                    }
-                    Downloads.emit(state)
-                    notify(state)
-                }
-                if (tokens[id] !== token) return@execute
-                val file = dir.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
-                    ?: throw IllegalStateException("yt-dlp produced no output file")
-                state.bytes = file.length()
-                state.filename = file.name
-                state.uri = publish(file, state.audio).toString()
-                state.progress = 100f
-                state.status = "done"
-                dir.deleteRecursively()
-                notifyDone(state)
-            } catch (e: Exception) {
-                // Pause/cancel kills the process, which surfaces here as an exception.
-                // Only report it if this attempt is still the current one.
-                if (tokens[id] !== token) return@execute
+            // Checked at dequeue time, not enqueue time: a queued item can sit for a
+            // while, and the network may have changed by the time its turn comes.
+            if (wifiOnly && !isOnWifi()) {
                 state.status = "failed"
-                state.error = e.message ?: e.toString()
-            } finally {
-                if (tokens[id] === token) {
-                    tokens.remove(id)
+                state.error = "Wi-Fi only is turned on and this connection isn't Wi-Fi."
+                Downloads.emit(state)
+                tokens.remove(id)
+                stopIfIdle()
+                return@execute
+            }
+            val dir = File(cacheDir, "dl/$id")
+            var error: Exception? = null
+            val attempts = if (autoRetry) 2 else 1
+            for (attempt in 1..attempts) {
+                if (tokens[id] !== token) return@execute
+                try {
+                    state.status = "running"
+                    state.error = null
                     Downloads.emit(state)
-                }
-                if (Downloads.states.values.none {
-                        it.status == "running" || it.status == "queued"
+                    Ytdlp.download(this, url, dir, formatId, audioFormat, id) { pct, eta, line ->
+                        state.progress = pct
+                        state.etaSeconds = eta
+                        parseSpeed(line)?.let { state.speed = it }
+                        parseTotal(line)?.let { state.totalBytes = it }
+                        // Converting/merging reports no percentage; surface it so the UI
+                        // does not look stalled at 100%.
+                        if (line.startsWith("[Merger]") || line.startsWith("[ExtractAudio]")) {
+                            state.status = "converting"
+                        }
+                        Downloads.emit(state)
+                        notify(state)
                     }
-                ) {
-                    stopSelf()
+                    if (tokens[id] !== token) return@execute
+                    val file =
+                        dir.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
+                            ?: throw IllegalStateException("yt-dlp produced no output file")
+                    state.bytes = file.length()
+                    state.filename = file.name
+                    state.uri = publish(file, state.audio).toString()
+                    state.progress = 100f
+                    state.status = "done"
+                    dir.deleteRecursively()
+                    if (notifyOnComplete) notifyDone(state)
+                    error = null
+                    break
+                } catch (e: Exception) {
+                    // Pause/cancel kills the process, which surfaces here as an exception.
+                    // Only treat it as a real failure if this attempt is still current.
+                    if (tokens[id] !== token) return@execute
+                    error = e
+                    if (attempt < attempts) {
+                        state.status = "queued"
+                        Downloads.emit(state)
+                        Thread.sleep(3000)
+                    }
                 }
             }
+            if (error != null) {
+                state.status = "failed"
+                state.error = error.message ?: error.toString()
+            }
+            if (tokens[id] === token) {
+                tokens.remove(id)
+                Downloads.emit(state)
+            }
+            stopIfIdle()
         }
+    }
+
+    private fun stopIfIdle() {
+        if (Downloads.states.values.none { it.status == "running" || it.status == "queued" }) {
+            stopSelf()
+        }
+    }
+
+    private fun isOnWifi(): Boolean {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return true
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     /** Kills the yt-dlp process. Partial files stay on disk so "paused" can resume. */
@@ -234,12 +275,25 @@ class DownloadService : Service() {
         // from a finished download could shutdownNow() and interrupt work that the next
         // enqueue had already submitted, killing it with InterruptedException.
         //
-        // ponytail: serial queue — one transfer at a time. Concurrency is a Settings knob
-        // (Phase 12); widen to a fixed pool when that lands.
-        private val queue = Executors.newSingleThreadExecutor()
+        // Sized by Settings > Concurrent downloads (1-3) via setConcurrency below.
+        private val queue =
+            ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS, LinkedBlockingQueue())
 
         /** Current attempt per download id. See [enqueue]. */
         private val tokens = ConcurrentHashMap<String, Any>()
+
+        /** Resizes the pool. Order matters: max must never dip below core mid-update. */
+        @Synchronized
+        private fun setConcurrency(n: Int) {
+            val size = n.coerceIn(1, 3)
+            if (size > queue.maximumPoolSize) {
+                queue.maximumPoolSize = size
+                queue.corePoolSize = size
+            } else {
+                queue.corePoolSize = size
+                queue.maximumPoolSize = size
+            }
+        }
 
         private const val CHANNEL_ID = "downloads"
         private const val NOTIF_ID = 1

@@ -45,6 +45,11 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Tried isMinifyEnabled: R8 breaks youtubedl-android's bundled Python
+            // interpreter at init — "class J2.a is not a concrete class", a crash on
+            // every launch. Its Python/JNI bridge isn't documented well enough to write
+            // a safe keep-rule set, and the size win is negligible anyway (the ~60MB
+            // is almost entirely native binaries R8 can't touch). Not worth the risk.
         }
     }
 }

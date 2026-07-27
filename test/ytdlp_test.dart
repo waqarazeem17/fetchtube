@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fetchtube/history.dart';
+import 'package:fetchtube/settings.dart';
 import 'package:fetchtube/ytdlp.dart';
 
 void main() {
@@ -64,6 +65,32 @@ void main() {
     test('an unrecognised error keeps yt-dlp own wording, minus the prefix', () {
       expect(humanizeYtDlpError('ERROR: Postprocessing: Conversion failed!'),
           'Postprocessing: Conversion failed!');
+    });
+  });
+
+  group('default video quality picker', () {
+    MediaFormat fmt(int height) =>
+        MediaFormat.fromJson({'format_id': '$height', 'height': height, 'ext': 'mp4'});
+    final formats = [1080, 720, 480, 360].map(fmt).toList();
+
+    test('"best" picks the top row', () {
+      final s = Settings.instance..defaultVideoQuality = 'best';
+      expect(s.pickDefaultVideo(formats)!.height, 1080);
+    });
+
+    test('a cap picks the nearest row at or below it', () {
+      final s = Settings.instance..defaultVideoQuality = '600';
+      expect(s.pickDefaultVideo(formats)!.height, 480);
+    });
+
+    test('a cap below every row falls back to the lowest, never nothing', () {
+      final s = Settings.instance..defaultVideoQuality = '144';
+      expect(s.pickDefaultVideo(formats)!.height, 360);
+    });
+
+    test('an empty format list yields no crash and no pick', () {
+      final s = Settings.instance..defaultVideoQuality = 'best';
+      expect(s.pickDefaultVideo([]), isNull);
     });
   });
 

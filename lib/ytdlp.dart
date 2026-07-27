@@ -11,7 +11,10 @@ class YtDlpException implements Exception {
   String toString() => message;
 }
 
-Future<Map<String, dynamic>> _call(String method, [Map<String, dynamic>? args]) async {
+Future<Map<String, dynamic>> _call(
+  String method, [
+  Map<String, dynamic>? args,
+]) async {
   try {
     final out = await _channel.invokeMethod<String>(method, args);
     return jsonDecode(out!) as Map<String, dynamic>;
@@ -53,7 +56,10 @@ String humanizeYtDlpError(String raw) {
     return 'No internet connection.';
   }
   // Keep yt-dlp's own last line — it is usually the most specific thing we have.
-  final line = raw.trim().split('\n').lastWhere((l) => l.trim().isNotEmpty, orElse: () => raw);
+  final line = raw
+      .trim()
+      .split('\n')
+      .lastWhere((l) => l.trim().isNotEmpty, orElse: () => raw);
   return line.replaceFirst(RegExp(r'^ERROR:\s*'), '');
 }
 
@@ -71,14 +77,15 @@ class SearchResult {
   final String? thumbnail;
 
   SearchResult.fromJson(Map<String, dynamic> j)
-      : id = j['id'] as String? ?? '',
-        title = j['title'] as String? ?? 'Untitled',
-        uploader = (j['channel'] ?? j['uploader'] ?? '') as String,
-        url = (j['url'] ?? 'https://www.youtube.com/watch?v=${j['id']}') as String,
-        duration = j['duration'] == null
-            ? null
-            : Duration(seconds: (j['duration'] as num).round()),
-        thumbnail = _pickThumb(j);
+    : id = j['id'] as String? ?? '',
+      title = j['title'] as String? ?? 'Untitled',
+      uploader = (j['channel'] ?? j['uploader'] ?? '') as String,
+      url =
+          (j['url'] ?? 'https://www.youtube.com/watch?v=${j['id']}') as String,
+      duration = j['duration'] == null
+          ? null
+          : Duration(seconds: (j['duration'] as num).round()),
+      thumbnail = _pickThumb(j);
 
   static String? _pickThumb(Map<String, dynamic> j) {
     final thumbs = j['thumbnails'] as List?;
@@ -107,18 +114,18 @@ class MediaFormat {
   final bool hasVideo, hasAudio;
 
   MediaFormat.fromJson(Map<String, dynamic> j)
-      : id = j['format_id'] as String? ?? '',
-        ext = j['ext'] as String? ?? '',
-        note = j['format_note'] as String?,
-        height = (j['height'] as num?)?.round(),
-        bitrate = (j['abr'] ?? j['tbr'] as num?) == null
-            ? null
-            : ((j['abr'] ?? j['tbr']) as num).round(),
-        size = (j['filesize'] ?? j['filesize_approx'] as num?) == null
-            ? null
-            : ((j['filesize'] ?? j['filesize_approx']) as num).round(),
-        hasVideo = j['vcodec'] != 'none' && j['vcodec'] != null,
-        hasAudio = j['acodec'] != 'none' && j['acodec'] != null;
+    : id = j['format_id'] as String? ?? '',
+      ext = j['ext'] as String? ?? '',
+      note = j['format_note'] as String?,
+      height = (j['height'] as num?)?.round(),
+      bitrate = (j['abr'] ?? j['tbr'] as num?) == null
+          ? null
+          : ((j['abr'] ?? j['tbr']) as num).round(),
+      size = (j['filesize'] ?? j['filesize_approx'] as num?) == null
+          ? null
+          : ((j['filesize'] ?? j['filesize_approx']) as num).round(),
+      hasVideo = j['vcodec'] != 'none' && j['vcodec'] != null,
+      hasAudio = j['acodec'] != 'none' && j['acodec'] != null;
 
   String get label => hasVideo
       ? '${height != null ? "${height}p" : note ?? id} · ${ext.toUpperCase()}'
@@ -132,17 +139,20 @@ class MediaInfo {
   final List<MediaFormat> video, audio;
 
   MediaInfo.fromJson(Map<String, dynamic> j)
-      : title = j['title'] as String? ?? 'Untitled',
-        url = j['webpage_url'] as String? ?? '',
-        uploader = (j['channel'] ?? j['uploader']) as String?,
-        thumbnail = j['thumbnail'] as String?,
-        duration = j['duration'] == null
-            ? null
-            : Duration(seconds: (j['duration'] as num).round()),
-        video = _formats(j, video: true),
-        audio = _formats(j, video: false);
+    : title = j['title'] as String? ?? 'Untitled',
+      url = j['webpage_url'] as String? ?? '',
+      uploader = (j['channel'] ?? j['uploader']) as String?,
+      thumbnail = j['thumbnail'] as String?,
+      duration = j['duration'] == null
+          ? null
+          : Duration(seconds: (j['duration'] as num).round()),
+      video = _formats(j, video: true),
+      audio = _formats(j, video: false);
 
-  static List<MediaFormat> _formats(Map<String, dynamic> j, {required bool video}) {
+  static List<MediaFormat> _formats(
+    Map<String, dynamic> j, {
+    required bool video,
+  }) {
     final all = (j['formats'] as List? ?? const [])
         .cast<Map<String, dynamic>>()
         .map(MediaFormat.fromJson);
@@ -156,8 +166,11 @@ class MediaInfo {
       final key = (video ? f.height : f.bitrate) ?? -1;
       if (seen.add(key)) out.add(f);
     }
-    out.sort((a, b) => ((video ? b.height : b.bitrate) ?? 0)
-        .compareTo((video ? a.height : a.bitrate) ?? 0));
+    out.sort(
+      (a, b) => ((video ? b.height : b.bitrate) ?? 0).compareTo(
+        (video ? a.height : a.bitrate) ?? 0,
+      ),
+    );
     return out;
   }
 }
@@ -184,11 +197,11 @@ class DownloadRequest {
 
   // Only the fields the native side understands; thumbnail/quality are display-only.
   Map<String, dynamic> toArgs() => {
-        'url': url,
-        'title': title,
-        'formatId': formatId,
-        'audioFormat': audioFormat,
-      };
+    'url': url,
+    'title': title,
+    'formatId': formatId,
+    'audioFormat': audioFormat,
+  };
 }
 
 class Download {
@@ -199,24 +212,25 @@ class Download {
   final String? uri, error;
 
   Download.fromEvent(Map<dynamic, dynamic> e)
-      : id = e['id'] as String,
-        title = e['title'] as String,
-        status = e['status'] as String,
-        speed = (e['speed'] ?? '') as String,
-        audio = (e['audio'] ?? false) as bool,
-        progress = ((e['progress'] ?? 0) as num).toDouble(),
-        eta = ((e['eta'] ?? -1) as num).round(),
-        total = ((e['total'] ?? -1) as num).round(),
-        uri = e['uri'] as String?,
-        error = e['error'] as String?,
-        bytes = ((e['bytes'] ?? -1) as num).round(),
-        filename = e['filename'] as String?;
+    : id = e['id'] as String,
+      title = e['title'] as String,
+      status = e['status'] as String,
+      speed = (e['speed'] ?? '') as String,
+      audio = (e['audio'] ?? false) as bool,
+      progress = ((e['progress'] ?? 0) as num).toDouble(),
+      eta = ((e['eta'] ?? -1) as num).round(),
+      total = ((e['total'] ?? -1) as num).round(),
+      uri = e['uri'] as String?,
+      error = e['error'] as String?,
+      bytes = ((e['bytes'] ?? -1) as num).round(),
+      filename = e['filename'] as String?;
 
   /// Size of the finished file. Differs from [total] whenever ffmpeg converted.
   final int bytes;
   final String? filename;
 
-  bool get active => status == 'running' || status == 'queued' || status == 'converting';
+  bool get active =>
+      status == 'running' || status == 'queued' || status == 'converting';
   bool get finished => status == 'done';
 
   /// Bytes transferred so far. yt-dlp reports a percentage and a total, not a count.
@@ -235,27 +249,62 @@ final Stream<Download> _downloads = _events
 
 Stream<Download> downloadEvents() => _downloads;
 
-Future<String> startDownload(DownloadRequest r) async =>
-    await _channel.invokeMethod<String>('download', r.toArgs()) ?? '';
+/// Queue-wide behaviour, supplied by the caller (Settings) rather than imported here
+/// to avoid a circular dependency between ytdlp.dart and settings.dart.
+class QueueOptions {
+  final bool wifiOnly, autoRetry, notifyOnComplete;
+  final int maxConcurrent;
+  const QueueOptions({
+    required this.wifiOnly,
+    required this.autoRetry,
+    required this.notifyOnComplete,
+    required this.maxConcurrent,
+  });
 
-Future<void> pauseDownload(String id) => _channel.invokeMethod('pause', {'id': id});
+  Map<String, dynamic> toArgs() => {
+    'wifiOnly': wifiOnly,
+    'autoRetry': autoRetry,
+    'notifyOnComplete': notifyOnComplete,
+    'maxConcurrent': maxConcurrent,
+  };
+}
 
-Future<void> cancelDownload(String id) => _channel.invokeMethod('cancel', {'id': id});
+Future<String> startDownload(DownloadRequest r, QueueOptions q) async =>
+    await _channel.invokeMethod<String>('download', {
+      ...r.toArgs(),
+      ...q.toArgs(),
+    }) ??
+    '';
+
+Future<void> pauseDownload(String id) =>
+    _channel.invokeMethod('pause', {'id': id});
+
+Future<void> cancelDownload(String id) =>
+    _channel.invokeMethod('cancel', {'id': id});
 
 /// Resume and retry are the same operation: re-run yt-dlp, which continues any
 /// partial file left in the download's directory.
-Future<void> resumeDownload(String id, DownloadRequest r) =>
-    _channel.invokeMethod('resume', {'id': id, ...r.toArgs()});
+Future<void> resumeDownload(String id, DownloadRequest r, QueueOptions q) =>
+    _channel.invokeMethod('resume', {'id': id, ...r.toArgs(), ...q.toArgs()});
+
+Future<String> appVersion() async =>
+    await _channel.invokeMethod<String>('appVersion') ?? '';
 
 Future<String> dataDir() async =>
     await _channel.invokeMethod<String>('dataDir') ?? '';
 
-Future<void> openFile(String uri) => _channel.invokeMethod('open', {'uri': uri});
+Future<void> openFile(String uri) =>
+    _channel.invokeMethod('open', {'uri': uri});
 
-Future<void> shareFile(String uri) => _channel.invokeMethod('share', {'uri': uri});
+Future<void> shareFile(String uri) =>
+    _channel.invokeMethod('share', {'uri': uri});
 
 Future<bool> deleteFile(String uri) async =>
     await _channel.invokeMethod<bool>('delete', {'uri': uri}) ?? false;
+
+Future<bool> renameFile(String uri, String name) async =>
+    await _channel.invokeMethod<bool>('rename', {'uri': uri, 'name': name}) ??
+    false;
 
 String formatBytes(int bytes) {
   if (bytes < 0) return '';

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import 'ytdlp.dart';
 
 /// One finished download, as remembered across app restarts.
@@ -25,34 +27,34 @@ class HistoryEntry {
   });
 
   HistoryEntry.fromJson(Map<String, dynamic> j)
-      : id = j['id'] as String,
-        title = j['title'] as String,
-        uri = j['uri'] as String,
-        filename = (j['filename'] ?? '') as String,
-        thumbnail = j['thumbnail'] as String?,
-        quality = j['quality'] as String?,
-        source = j['source'] as String?,
-        audio = (j['audio'] ?? false) as bool,
-        bytes = ((j['bytes'] ?? -1) as num).round(),
-        date = DateTime.fromMillisecondsSinceEpoch((j['date'] as num).round());
+    : id = j['id'] as String,
+      title = j['title'] as String,
+      uri = j['uri'] as String,
+      filename = (j['filename'] ?? '') as String,
+      thumbnail = j['thumbnail'] as String?,
+      quality = j['quality'] as String?,
+      source = j['source'] as String?,
+      audio = (j['audio'] ?? false) as bool,
+      bytes = ((j['bytes'] ?? -1) as num).round(),
+      date = DateTime.fromMillisecondsSinceEpoch((j['date'] as num).round());
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'title': title,
-        'uri': uri,
-        'filename': filename,
-        'thumbnail': thumbnail,
-        'quality': quality,
-        'source': source,
-        'audio': audio,
-        'bytes': bytes,
-        'date': date.millisecondsSinceEpoch,
-      };
+    'id': id,
+    'title': title,
+    'uri': uri,
+    'filename': filename,
+    'thumbnail': thumbnail,
+    'quality': quality,
+    'source': source,
+    'audio': audio,
+    'bytes': bytes,
+    'date': date.millisecondsSinceEpoch,
+  };
 
   String get subtitle => [
-        if (quality != null && quality!.isNotEmpty) quality,
-        if (bytes > 0) formatBytes(bytes),
-      ].join(' • ');
+    if (quality != null && quality!.isNotEmpty) quality,
+    if (bytes > 0) formatBytes(bytes),
+  ].join(' • ');
 }
 
 /// Append-only local history in a single JSON file.
@@ -60,7 +62,7 @@ class HistoryEntry {
 /// ponytail: a flat file, read once at launch and rewritten on change. Fine for the
 /// hundreds of rows a downloader accumulates; move to sqflite if it ever needs
 /// queries, paging, or partial writes.
-class History {
+class History extends ChangeNotifier {
   static final instance = History._();
   History._();
 
@@ -75,8 +77,9 @@ class History {
   int countOf({required bool audio}) => where(audio: audio).length;
 
   /// Bytes held on this device for one media type. Drives the home tiles.
-  int bytesOf({required bool audio}) => where(audio: audio)
-      .fold(0, (sum, e) => sum + (e.bytes > 0 ? e.bytes : 0));
+  int bytesOf({required bool audio}) => where(
+    audio: audio,
+  ).fold(0, (sum, e) => sum + (e.bytes > 0 ? e.bytes : 0));
 
   Future<void> load() async {
     final dir = await dataDir();
@@ -106,12 +109,37 @@ class History {
     await _flush();
   }
 
+  /// Replaces the stored title and filename for one entry, e.g. after a rename.
+  Future<void> rename(
+    String id, {
+    required String title,
+    required String filename,
+  }) async {
+    final i = _entries.indexWhere((e) => e.id == id);
+    if (i == -1) return;
+    final e = _entries[i];
+    _entries[i] = HistoryEntry(
+      id: e.id,
+      title: title,
+      uri: e.uri,
+      filename: filename,
+      audio: e.audio,
+      bytes: e.bytes,
+      date: e.date,
+      thumbnail: e.thumbnail,
+      quality: e.quality,
+      source: e.source,
+    );
+    await _flush();
+  }
+
   Future<void> clear() async {
     _entries.clear();
     await _flush();
   }
 
   Future<void> _flush() async {
+    notifyListeners();
     final file = _file;
     if (file == null) return;
     // Write-then-rename so an interrupted write cannot leave a half-written file.

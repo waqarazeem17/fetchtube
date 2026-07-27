@@ -2,9 +2,11 @@ package com.fetchtube.fetchtube
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.MediaStore
 import androidx.core.net.toUri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,16 +40,29 @@ class MainActivity : FlutterActivity() {
                                 "title" to call.argument<String>("title"),
                                 "formatId" to call.argument<String>("formatId"),
                                 "audioFormat" to call.argument<String>("audioFormat"),
+                                // Settings values, re-read every call so a mid-queue
+                                // change (e.g. turning off Wi-Fi only) takes effect.
+                                "wifiOnly" to call.argument<Boolean>("wifiOnly").toString(),
+                                "maxConcurrent" to
+                                    (call.argument<Int>("maxConcurrent") ?: 1).toString(),
+                                "autoRetry" to call.argument<Boolean>("autoRetry").toString(),
+                                "notifyOnComplete" to
+                                    call.argument<Boolean>("notifyOnComplete").toString(),
                             ),
                         )
                         if (failure == null) result.success(id)
                         else result.error("service", failure, null)
                         return@setMethodCallHandler
                     }
-                    // Where Dart keeps its history file. Avoids a path_provider dependency
-                    // for the one path we need.
+                    // Where Dart keeps its history/settings files. Avoids a path_provider
+                    // dependency for the one path we need.
                     "dataDir" -> {
                         result.success(filesDir.absolutePath)
+                        return@setMethodCallHandler
+                    }
+                    "appVersion" -> {
+                        val name = packageManager.getPackageInfo(packageName, 0).versionName
+                        result.success(name ?: "unknown")
                         return@setMethodCallHandler
                     }
                     "open", "share" -> {
@@ -75,6 +90,18 @@ class MainActivity : FlutterActivity() {
                         val uri = call.argument<String>("uri")!!.toUri()
                         val rows = runCatching { contentResolver.delete(uri, null, null) }
                             .getOrDefault(0)
+                        result.success(rows > 0)
+                        return@setMethodCallHandler
+                    }
+                    "rename" -> {
+                        val uri = call.argument<String>("uri")!!.toUri()
+                        val name = call.argument<String>("name")!!
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        }
+                        val rows = runCatching {
+                            contentResolver.update(uri, values, null, null)
+                        }.getOrDefault(0)
                         result.success(rows > 0)
                         return@setMethodCallHandler
                     }

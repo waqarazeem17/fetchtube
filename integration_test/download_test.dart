@@ -8,6 +8,13 @@ import 'package:integration_test/integration_test.dart';
 
 const _video = 'https://www.youtube.com/watch?v=7wtfhZwyrcc';
 
+const _opts = QueueOptions(
+  wifiOnly: false,
+  autoRetry: false,
+  notifyOnComplete: true,
+  maxConcurrent: 1,
+);
+
 /// Waits for [id] to reach a terminal state, returning the last event seen.
 Future<Download> _settle(String id, {Duration timeout = const Duration(minutes: 5)}) {
   return downloadEvents()
@@ -30,11 +37,10 @@ void main() {
   testWidgets('video downloads, merges and lands in MediaStore', (tester) async {
     final info = await mediaInfo(_video);
     final smallest = info.video.last; // lowest resolution keeps the test quick
-    final id = await startDownload(DownloadRequest(
-      url: _video,
-      title: info.title,
-      formatId: smallest.id,
-    ));
+    final id = await startDownload(
+      DownloadRequest(url: _video, title: info.title, formatId: smallest.id),
+      _opts,
+    );
 
     final result = await _settle(id);
     expect(result.status, 'done', reason: result.error ?? '');
@@ -52,7 +58,7 @@ void main() {
       title: info.title,
       formatId: biggest.id,
     );
-    final id = await startDownload(request);
+    final id = await startDownload(request, _opts);
 
     // Wait until bytes are actually moving, then pause.
     await downloadEvents()
@@ -70,7 +76,7 @@ void main() {
     expect(paused.progress, greaterThan(0));
 
     final settled = _settle(id);
-    await resumeDownload(id, request);
+    await resumeDownload(id, request, _opts);
     final result = await settled;
     expect(result.status, 'done', reason: result.error ?? '');
     expect(result.uri, startsWith('content://'));
@@ -88,13 +94,16 @@ void main() {
     final info = await mediaInfo(track.url);
     expect(info.audio, isNotEmpty);
 
-    final id = await startDownload(DownloadRequest(
-      url: track.url,
-      title: track.title,
-      audioFormat: 'mp3',
-      thumbnail: track.thumbnail,
-      quality: '${info.audio.first.label} -> MP3',
-    ));
+    final id = await startDownload(
+      DownloadRequest(
+        url: track.url,
+        title: track.title,
+        audioFormat: 'mp3',
+        thumbnail: track.thumbnail,
+        quality: '${info.audio.first.label} -> MP3',
+      ),
+      _opts,
+    );
     final result = await _settle(id);
     expect(result.status, 'done', reason: result.error ?? '');
     expect(result.filename, endsWith('.mp3'));
@@ -120,11 +129,10 @@ void main() {
   }, timeout: const Timeout(Duration(minutes: 8)));
 
   testWidgets('audio extracts to mp3', (tester) async {
-    final id = await startDownload(const DownloadRequest(
-      url: _video,
-      title: 'audio test',
-      audioFormat: 'mp3',
-    ));
+    final id = await startDownload(
+      const DownloadRequest(url: _video, title: 'audio test', audioFormat: 'mp3'),
+      _opts,
+    );
     final result = await _settle(id);
     expect(result.status, 'done', reason: result.error ?? '');
     expect(result.uri, startsWith('content://'));
