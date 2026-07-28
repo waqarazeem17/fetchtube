@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 
 import 'downloads.dart';
 import 'history.dart';
@@ -13,6 +14,13 @@ void main() async {
       .instance; // subscribe to native events before any UI can start one.
   await History.instance.load();
   await Settings.instance.load();
+  // Starts the media session that lets music keep playing after the app is
+  // backgrounded, and puts transport controls on the lockscreen.
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.fetchtube.fetchtube.playback',
+    androidNotificationChannelName: 'Playback',
+    androidNotificationOngoing: true,
+  );
   runApp(const FetchTubeApp());
 }
 

@@ -66,6 +66,9 @@ established.
 - Built-in playback for both video and audio (audio shows the thumbnail
   as artwork) — no need to leave the app or hand off to another player
 - Play/pause, seek, volume, duration, fullscreen for video
+- **Music keeps playing when you leave the app**, with a full system media
+  notification: album art, title, transport controls and a scrub bar on
+  the lockscreen and in the shade. Headset/media buttons work too.
 
 ### Settings
 - Default video/audio quality, Wi-Fi only, concurrent downloads, auto
@@ -224,7 +227,12 @@ erases that JSON file only; it never touches the actual files in
 - The full user journey: search → pick a result → download → verify it
   survives a history reload
 
-All five pass on a clean device. **Expect intermittent failures anyway** —
+A second suite, `integration_test/playback_test.dart`, covers playback
+against real downloaded files: audio plays/seeks/pauses through the
+background-capable engine (including the MediaItem wiring the lockscreen
+needs), and video initialises with real dimensions, plays and seeks.
+
+All pass on a clean device. **Expect intermittent failures anyway** —
 not from the app, but from YouTube. Across repeated runs the observed
 failures were all upstream: `HTTP 429`, "Sign in to confirm you're not a
 bot", `HTTP 403` (expired media link), and "The page needs to be
@@ -343,15 +351,12 @@ tap-through). Before a release, walk through:
   bridge resolves by name; a keep rule would have to name those
   obfuscated classes, which change with every library release. Since the
   APK is ~99% native binaries R8 cannot touch, there is nothing to win.
-- **Background audio is not implemented.** Playback stops when the app
-  is backgrounded; continuing needs a MediaSession and its own service.
-  Marked with a `ponytail:` comment in `player.dart`.
-- **16 KB page size (Android 15+)** and **MP3 encoder (`libmp3lame`)
-  presence** were flagged as open questions in the original project
-  audit; `libmp3lame` has since been confirmed present and working
-  (verified by an actual MP3 download in this session). 16 KB page size
-  alignment of the bundled native libraries has not been independently
-  verified.
+- **16 KB page size (Android 15+)** alignment of the bundled native
+  libraries has not been independently verified. (The other original open
+  question — whether the bundled ffmpeg has an MP3 encoder — is settled:
+  `libmp3lame` is present and MP3 export works.)
+- `just_audio_background` is a long-standing `0.0.1-beta` release. It is
+  the standard solution and works here, but it is formally beta.
 - **Battery draw specifically has not been measured.** CPU, memory,
   throughput and frame timing were (see [Performance](#performance-measured)),
   but battery is not meaningfully measurable on an emulator — it needs a

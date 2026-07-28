@@ -12,6 +12,7 @@ import java.io.File
  */
 object Ytdlp {
     private var ready = false
+    private var updateAttempted = false
 
     @Synchronized
     fun ensureInit(context: Context) {
@@ -21,20 +22,22 @@ object Ytdlp {
             FFmpeg.getInstance().init(context)
             ready = true
         }
-        // Retried on later calls so a failed first update heals itself.
         updateIfStale(context)
     }
 
     /**
      * The yt-dlp bundled in the AAR is ~2 years old and YouTube rejects its format
-     * requests, so a first-run update matters. It is still best-effort: a failed update
-     * must not brick the app, because the unpacked copy can already search and often
-     * download. version() is null until an update lands, so it doubles as the flag.
+     * requests, so a first-run update matters. It is best-effort: a failed update must
+     * not brick the app, because the unpacked copy can still search.
      *
-     * ponytail: updates once, on first success. yt-dlp rots in weeks — add a periodic
-     * and manual re-check once Settings exists.
+     * Attempted at most once per process. It used to retry whenever version() was still
+     * null, which meant that if the update kept failing *every* search paid a slow
+     * network round trip before it could even start. Retrying on the next launch is
+     * enough self-healing; blocking every call is not worth it.
      */
     private fun updateIfStale(context: Context) {
+        if (updateAttempted) return
+        updateAttempted = true
         if (YoutubeDL.getInstance().version(context) != null) return
         runCatching {
             YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)

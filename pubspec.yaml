@@ -31,8 +31,13 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Plays downloaded files in-app; wraps ExoPlayer on Android.
+  # Video playback in-app; wraps ExoPlayer on Android.
   video_player: ^2.11.1
+  # Audio playback. Separate from video_player because audio has to keep going when
+  # the app is backgrounded, which needs a MediaSession + foreground service —
+  # just_audio_background provides both. (Long-standing beta, but the standard answer.)
+  just_audio: ^0.10.6
+  just_audio_background: ^0.0.1-beta.17
 
 dev_dependencies:
   flutter_test:

@@ -8,7 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.net.toUri
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -17,7 +17,10 @@ import java.util.concurrent.Executors
 private const val CHANNEL = "fetchtube/ytdlp"
 private const val EVENTS = "fetchtube/downloads"
 
-class MainActivity : FlutterActivity() {
+// Extends AudioServiceActivity (itself a FlutterActivity) rather than FlutterActivity
+// directly: audio_service needs to hand the media session the right FlutterEngine, and
+// refuses to initialise otherwise.
+class MainActivity : AudioServiceActivity() {
     // yt-dlp calls block on a child process, so they never touch the main thread.
     private val io = Executors.newSingleThreadExecutor()
 
