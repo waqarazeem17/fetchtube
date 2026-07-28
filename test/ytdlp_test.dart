@@ -62,6 +62,35 @@ void main() {
           'No internet connection.');
     });
 
+    test('a MediaStore naming collision is readable, not a column dump', () {
+      // Observed on device after many downloads of the same title: MediaStore
+      // stops uniquifying and returns every column it tried.
+      const raw =
+          'Failed to build unique file: /storage/emulated/0/Download/FetchTube/'
+          'Videos/Song.mp4 bucket_display_name=Videos volume_name=external_primary '
+          'date_modified=null _size=null is_trashed=0';
+      expect(humanizeYtDlpError(raw), contains('already exists'));
+      expect(humanizeYtDlpError(raw), isNot(contains('bucket_display_name')));
+    });
+
+    test('a transient source glitch suggests retrying', () {
+      // Observed on device; yt-dlp emits it doubled.
+      expect(
+        humanizeYtDlpError(
+          '[youtube] 7wtfhZwyrcc: The page needs to be reloaded.. '
+          'The page needs to be reloaded.',
+        ),
+        'The source had a temporary glitch. Tap retry.',
+      );
+    });
+
+    test('a full disk says so', () {
+      expect(
+        humanizeYtDlpError('OSError: [Errno 28] ENOSPC: No space left on device'),
+        contains('storage space'),
+      );
+    });
+
     test('an unrecognised error keeps yt-dlp own wording, minus the prefix', () {
       expect(humanizeYtDlpError('ERROR: Postprocessing: Conversion failed!'),
           'Postprocessing: Conversion failed!');
@@ -182,6 +211,53 @@ void main() {
     expect(info.audio.map((f) => f.bitrate), [160, 128]);
     expect(info.video.first.label, '1080p · MP4');
     expect(info.audio.first.label, '160kbps · WEBM');
+  });
+
+  group('reported download size', () {
+    test('video sizes include the audio that gets merged in', () {
+      // Measured on device: a 240p row reported as 4.0MB produced a 7.4MB file,
+      // because the download is a video-only stream muxed with the best audio.
+      final info = MediaInfo.fromJson({
+        'title': 'x',
+        'formats': [
+          {
+            'format_id': '1',
+            'ext': 'mp4',
+            'height': 240,
+            'filesize': 4000000,
+            'vcodec': 'avc1',
+            'acodec': 'none',
+          },
+          {
+            'format_id': '2',
+            'ext': 'm4a',
+            'abr': 130,
+            'filesize': 3400000,
+            'vcodec': 'none',
+            'acodec': 'mp4a',
+          },
+        ],
+      });
+      expect(info.mergedSize(info.video.first), 7400000);
+      // Audio rows download on their own, so they are reported unchanged.
+      expect(info.mergedSize(info.audio.first), 3400000);
+    });
+
+    test('an unknown size stays unknown rather than being guessed', () {
+      final info = MediaInfo.fromJson({
+        'title': 'x',
+        'formats': [
+          {
+            'format_id': '1',
+            'ext': 'mp4',
+            'height': 240,
+            'vcodec': 'avc1',
+            'acodec': 'none',
+          },
+        ],
+      });
+      expect(info.mergedSize(info.video.first), isNull);
+    });
   });
 
   test('a video-only source yields no invented audio qualities', () {

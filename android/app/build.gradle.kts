@@ -45,11 +45,18 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
-            // Tried isMinifyEnabled: R8 breaks youtubedl-android's bundled Python
-            // interpreter at init — "class J2.a is not a concrete class", a crash on
-            // every launch. Its Python/JNI bridge isn't documented well enough to write
-            // a safe keep-rule set, and the size win is negligible anyway (the ~60MB
-            // is almost entirely native binaries R8 can't touch). Not worth the risk.
+            // Minification stays OFF. Tested twice, the second time carefully isolated
+            // on a native x86_64 release (so ARM translation could not be blamed):
+            //
+            //   unminified  63.9MB  works
+            //   minified    64.7MB  crashes at YoutubeDL.init()
+            //
+            // It is both fatal and *larger*. The crash is
+            // "class i2.a is not a concrete class" — youtubedl-android ships an
+            // already-obfuscated Chaquopy, so R8 re-obfuscates classes its Python
+            // bridge resolves by name. A keep rule would have to name those obfuscated
+            // classes, which change with every library release. The APK is ~99% native
+            // binaries R8 cannot touch, so there is nothing to win here anyway.
         }
     }
 }

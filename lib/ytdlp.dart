@@ -44,9 +44,23 @@ String humanizeYtDlpError(String raw) {
   if (lower.contains('429') || lower.contains('too many requests')) {
     return 'The source is rate-limiting this network. Try again in a few minutes.';
   }
+  // YouTube's transient session glitch. It arrives doubled ("...reloaded.. The page
+  // needs to be reloaded.") and means nothing to a user; retrying usually works.
+  if (lower.contains('page needs to be reloaded')) {
+    return 'The source had a temporary glitch. Tap retry.';
+  }
   // Media URLs are short-lived; a 403 means this one went stale and re-extracting fixes it.
   if (lower.contains('403') || lower.contains('forbidden')) {
     return 'That download link expired. Tap retry to fetch a fresh one.';
+  }
+  // MediaStore appends "(1)", "(2)"… to avoid collisions but gives up after ~32,
+  // and then reports it as an unreadable dump of every column it tried.
+  if (lower.contains('failed to build unique file')) {
+    return 'A file with this name already exists too many times. '
+        'Rename or delete the older copies and try again.';
+  }
+  if (lower.contains('enospc') || lower.contains('no space left')) {
+    return 'Not enough storage space to finish this download.';
   }
   // Genuine connectivity only: no host, no route, or a timeout.
   if (lower.contains('failed to resolve') ||
@@ -172,6 +186,18 @@ class MediaInfo {
       ),
     );
     return out;
+  }
+
+  /// What the finished file will actually weigh.
+  ///
+  /// A video row is a video-only stream: the download merges it with the best
+  /// audio, so the file on disk is bigger than the stream yt-dlp reports.
+  /// Measured on device, a "4.0 MB" 240p row produced a 7.4 MB file — the
+  /// difference being exactly the audio track.
+  int? mergedSize(MediaFormat f) {
+    if (!f.hasVideo || f.size == null) return f.size;
+    final audioSize = audio.isEmpty ? null : audio.first.size;
+    return audioSize == null ? f.size : f.size! + audioSize;
   }
 }
 

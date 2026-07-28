@@ -284,7 +284,9 @@ class _DetailsScreenState extends State<DetailsScreen> {
           leading: Icon(Icons.download_outlined, size: 20, color: accent),
           title: Text(f.label),
           trailing: Text(
-            f.size == null ? '' : formatBytes(f.size!),
+            // Includes the audio that gets merged in, so this matches the file
+            // that actually lands on disk.
+            info.mergedSize(f) == null ? '' : formatBytes(info.mergedSize(f)!),
             style: kNumericStyle.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),

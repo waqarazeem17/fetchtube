@@ -13,12 +13,19 @@ for exactly what that means in practice.
 
 ## Status
 
-Development phases 0–13 are implemented; 14/16 are partly covered by the
-automated test suites described below rather than a manual device matrix;
-17 (release optimization) was attempted and reverted — see
-[Known limitations](#known-limitations). Everything under
-[Features](#features) has been exercised on a real Android emulator with
-real YouTube searches and downloads, not just compiled.
+Development phases 0–16 are implemented and verified.
+[Performance](#performance-measured) has measured numbers rather than
+estimates, and both test suites pass on a clean device
+(see [Testing](#testing)). Everything under [Features](#features) has
+been exercised on a real Android emulator with real YouTube searches and
+downloads, not just compiled.
+
+**Phase 17 (release optimization) is incomplete.** Debug builds are
+solid; release builds crash intermittently in the bundled Python bridge
+and need verification on real hardware before distribution. This is the
+one thing standing between the project and a shippable APK — see
+[Known limitations](#known-limitations) for exactly what was and wasn't
+established.
 
 ## Features
 
@@ -83,6 +90,9 @@ instead of a generic "Error":
 | A download link went stale (HTTP 403) | "That download link expired. Tap retry to fetch a fresh one." |
 | Wi-Fi only is on, you're on mobile data | "Wi-Fi only is turned on and this connection isn't Wi-Fi." |
 | App can't start a download in the background | "Downloads can't start while FetchTube is in the background. Open the app and try again." |
+| Source has a transient glitch | "The source had a temporary glitch. Tap retry." |
+| Too many copies of the same filename | "A file with this name already exists too many times…" |
+| Device out of storage | "Not enough storage space to finish this download." |
 
 ## Getting started
 
@@ -214,6 +224,57 @@ erases that JSON file only; it never touches the actual files in
 - The full user journey: search → pick a result → download → verify it
   survives a history reload
 
+All five pass on a clean device. **Expect intermittent failures anyway** —
+not from the app, but from YouTube. Across repeated runs the observed
+failures were all upstream: `HTTP 429`, "Sign in to confirm you're not a
+bot", `HTTP 403` (expired media link), and "The page needs to be
+reloaded." Re-running against the same code passes. Each of those is
+mapped to a plain-language message with a retry path, and Settings →
+Auto retry exists precisely because these are common.
+
+Two housekeeping notes if you run the suite repeatedly:
+- It downloads the same title every time, and MediaStore stops appending
+  `(1)`, `(2)`… after roughly 32 copies. Clear
+  `Download/FetchTube` between long test sessions or downloads will start
+  failing with a naming collision.
+- Large-file tests need real free space (see
+  [Performance](#performance-measured) on peak disk use).
+
+### Performance (measured)
+
+Measured on a Pixel 7 emulator (Android 16) while downloads ran, using
+`dumpsys meminfo` / `cpuinfo` and Choreographer frame-skip logs.
+
+| Download | App memory (PSS) | Java heap | Native heap |
+|---|---|---|---|
+| Idle / small (3–8 MB) | ~247–262 MB | 11–14 MB | ~38–42 MB |
+| Large, downloading (683 MB) | ~255–262 MB | 11–14 MB | ~41–42 MB |
+| Large, ffmpeg merging | ~275–279 MB | 11–14 MB | ~48 MB |
+| After completion | ~276 MB | 11 MB | ~46 MB |
+
+The important result: **memory does not scale with file size.** A 683 MB
+download uses essentially the same memory as a 3 MB one, because yt-dlp
+streams to disk in a child process rather than buffering in the app. The
+only meaningful movement is ~7 MB of native heap while ffmpeg is muxing.
+
+- **Cold start**: ~0.9–1.2 s (`am start -W`, release build, fresh install)
+- **APK size**: ~61–64 MB per ABI split; ~150 MB if built universal
+- **CPU**: ~11% of one core during download (7.7% user / 3.7% kernel)
+- **UI responsiveness**: **zero** skipped frames across repeated tab
+  switching and list scrolling during a 683 MB download
+- **Throughput**: ~1.5 MB/s sustained on the emulator's network
+- **Cleanup**: the cache directory returned to empty after publishing —
+  no disk leak — and the foreground service stopped itself once the queue
+  drained
+- **Queue**: with concurrency at 1, extra downloads correctly showed
+  "Queued" behind the active one, and cancelling a queued item did not
+  disturb the running one
+
+**Peak disk use is roughly 2× the final file size.** A 683 MB result
+briefly occupied ~1.29 GB of cache while ffmpeg wrote the merged output
+alongside the source streams, then another copy during the MediaStore
+publish. Budget free space accordingly for very large downloads.
+
 ### Manual checklist
 Automated coverage stops at the native yt-dlp/ffmpeg boundary and at
 platform-specific UI behavior (foreground-service lifecycle across screen
@@ -250,23 +311,38 @@ tap-through). Before a release, walk through:
 
 ## Known limitations
 
-- **Not verified on physical ARM64 hardware.** All testing in this
-  repository ran on an x86_64 Android emulator. A release-mode
-  `arm64-v8a` APK crashed reliably on that emulator
-  (`class N2.a is not a concrete class` inside the bundled Chaquopy
-  Python bridge) when run through the emulator's ARM-on-x86 binary
-  translation layer; the same code, same steps, on the emulator's native
-  multi-ABI debug build did not crash at all. That points at the
-  translation layer rather than the app, since real ARM64 hardware runs
-  the `arm64-v8a` binaries natively with no translation involved — but
-  this has not been confirmed on an actual phone. **Test on a real
-  ARM64 device before shipping.**
-- **R8/ProGuard minification is disabled on purpose.** It was tried;
-  it broke the same Python bridge at startup on every launch (not just
-  under translation). Chaquopy's reflection surface inside the bundled
-  library isn't documented well enough to write a safe keep-rule set
-  quickly, and the size win was under 1% anyway — the APK is almost
-  entirely native binaries R8 can't touch.
+- **The release build is not yet trustworthy, and this is the one
+  blocking item before shipping.** The debug build has been rock solid
+  all through development — every integration test, every manual run.
+  Release builds, however, intermittently crash at startup inside the
+  bundled Chaquopy Python bridge with
+  `class N2.a is not a concrete class` (thrown from `YoutubeDL.init()`).
+  What is established:
+
+  | Build | Result |
+  |---|---|
+  | Debug, native x86_64 | Always works |
+  | Release, unminified, native x86_64 | Worked twice (incl. a real search), later crashed on relaunch |
+  | Release, minified, native x86_64 | Crashes |
+  | Release, `arm64-v8a` under emulator ARM translation | Crashes |
+
+  The emulator used for testing also repeatedly entered broken states of
+  its own (SystemUI ANR loops, phantom activity instances, blank
+  `screencap` surfaces), so the *intermittent* release behavior cannot be
+  cleanly attributed between the app and the emulator. **Verify release
+  builds on real ARM64 hardware before distributing.** If the crash
+  reproduces there, the likely culprit is Chaquopy's asset extraction
+  rather than anything in this repository's code.
+
+- **R8/ProGuard minification is disabled on purpose.** Tried twice. The
+  second attempt was isolated on a *native* x86_64 release so ARM
+  translation could not be blamed, with keep rules for `com.chaquo.**`,
+  `com.yausername.**` and Jackson: it still crashed, and the minified APK
+  was **larger** (64.7 MB vs 63.9 MB). youtubedl-android ships an
+  already-obfuscated Chaquopy, so R8 re-obfuscates classes its Python
+  bridge resolves by name; a keep rule would have to name those
+  obfuscated classes, which change with every library release. Since the
+  APK is ~99% native binaries R8 cannot touch, there is nothing to win.
 - **Background audio is not implemented.** Playback stops when the app
   is backgrounded; continuing needs a MediaSession and its own service.
   Marked with a `ponytail:` comment in `player.dart`.
@@ -276,10 +352,10 @@ tap-through). Before a release, walk through:
   (verified by an actual MP3 download in this session). 16 KB page size
   alignment of the bundled native libraries has not been independently
   verified.
-- Performance under sustained load (Phase 14: RAM/CPU/battery across a
-  5 MB → 1 GB+ range) has not been benchmarked with profiling tools in
-  this session; only functional correctness was confirmed at each size
-  tested.
+- **Battery draw specifically has not been measured.** CPU, memory,
+  throughput and frame timing were (see [Performance](#performance-measured)),
+  but battery is not meaningfully measurable on an emulator — it needs a
+  physical device over a sustained run.
 
 ## Development order this project followed
 
