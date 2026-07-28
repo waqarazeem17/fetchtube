@@ -68,6 +68,19 @@ class MainActivity : AudioServiceActivity() {
                         result.success(name ?: "unknown")
                         return@setMethodCallHandler
                     }
+                    "openUrl" -> {
+                        val intent = Intent(
+                            Intent.ACTION_VIEW,
+                            call.argument<String>("url")!!.toUri(),
+                        )
+                        try {
+                            startActivity(intent)
+                            result.success(null)
+                        } catch (e: ActivityNotFoundException) {
+                            result.error("noapp", "No browser is available", null)
+                        }
+                        return@setMethodCallHandler
+                    }
                     "open", "share" -> {
                         val uri = call.argument<String>("uri")!!.toUri()
                         val type = contentResolver.getType(uri) ?: "*/*"

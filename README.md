@@ -13,19 +13,20 @@ for exactly what that means in practice.
 
 ## Status
 
-Development phases 0–16 are implemented and verified.
+All development phases (0–17) are implemented and verified.
 [Performance](#performance-measured) has measured numbers rather than
 estimates, and both test suites pass on a clean device
 (see [Testing](#testing)). Everything under [Features](#features) has
 been exercised on a real Android emulator with real YouTube searches and
 downloads, not just compiled.
 
-**Phase 17 (release optimization) is incomplete.** Debug builds are
-solid; release builds crash intermittently in the bundled Python bridge
-and need verification on real hardware before distribution. This is the
-one thing standing between the project and a shippable APK — see
-[Known limitations](#known-limitations) for exactly what was and wasn't
-established.
+Release builds now work: the long-standing release crash was Flutter
+silently enabling R8, which breaks the bundled Python bridge. It is
+explicitly disabled — see [Known limitations](#known-limitations).
+
+Still unverified because they need physical hardware rather than an
+emulator: battery draw, 16 KB page-size alignment, upgrade-installs, and
+the Android 11–15 device matrix.
 
 ## Features
 
@@ -77,7 +78,8 @@ established.
 - Light / Dark / System theme
 - Storage usage (videos vs. music) and "Clear history" (forgets the list,
   never touches the files)
-- App version, extractor (yt-dlp) version, open-source licenses
+- App version, extractor (yt-dlp) version, open-source licenses, and a
+  link to the author
 
 ### Errors, not crashes
 Every failure mode below is mapped to a specific, actionable message
@@ -119,8 +121,15 @@ First launch takes noticeably longer than normal — see
 flutter build apk --release --split-per-abi
 ```
 Always use `--split-per-abi`. A universal APK bundles Python + ffmpeg for
-every architecture and balloons to ~150 MB; a split APK is ~60 MB per
-device.
+every architecture and balloons to ~166 MB; split APKs are:
+
+| ABI | Size | Use for |
+|---|---|---|
+| `app-arm64-v8a-release.apk` | 73.6 MB | Almost every modern phone |
+| `app-armeabi-v7a-release.apk` | 66.8 MB | Older 32-bit devices |
+| `app-x86_64-release.apk` | 76.6 MB | Emulators |
+
+They land in `build/app/outputs/flutter-apk/`.
 
 ### Run the test suites
 ```bash
@@ -334,38 +343,29 @@ tap-through). Before a release, walk through:
 
 ## Known limitations
 
-- **The release build is not yet trustworthy, and this is the one
-  blocking item before shipping.** The debug build has been rock solid
-  all through development — every integration test, every manual run.
-  Release builds, however, intermittently crash at startup inside the
-  bundled Chaquopy Python bridge with
-  `class N2.a is not a concrete class` (thrown from `YoutubeDL.init()`).
-  What is established:
+- **R8 must stay explicitly disabled.** This was the long-standing
+  release-build crash, and the cause turned out to be subtle:
+  `isMinifyEnabled` was never set, but Flutter's Gradle plugin turns R8 on
+  for release builds anyway, so release APKs were being silently minified.
+  They crashed at `YoutubeDL.init()` with
+  `class <obf>.a is not a concrete class`.
 
-  | Build | Result |
-  |---|---|
-  | Debug, native x86_64 | Always works |
-  | Release, unminified, native x86_64 | Worked twice (incl. a real search), later crashed on relaunch |
-  | Release, minified, native x86_64 | Crashes |
-  | Release, `arm64-v8a` under emulator ARM translation | Crashes |
+  The giveaway was that the obfuscated class name **changed on every
+  build** (`J2.a` → `N2.a` → `Y2.a`) and that the app's own classes were
+  obfuscated in the stack trace — impossible unless R8 was running.
+  youtubedl-android ships an already-obfuscated Chaquopy whose Python
+  bridge resolves classes by name, so re-obfuscation breaks it. A keep
+  rule would have to name classes that change with every library release.
 
-  The emulator used for testing also repeatedly entered broken states of
-  its own (SystemUI ANR loops, phantom activity instances, blank
-  `screencap` surfaces), so the *intermittent* release behavior cannot be
-  cleanly attributed between the app and the emulator. **Verify release
-  builds on real ARM64 hardware before distributing.** If the crash
-  reproduces there, the likely culprit is Chaquopy's asset extraction
-  rather than anything in this repository's code.
+  `isMinifyEnabled = false` and `isShrinkResources = false` are now set
+  explicitly in `android/app/build.gradle.kts`. **Do not remove them.**
+  With them, a release build searches and downloads normally. There is
+  nothing to win from minification here regardless: the APK is ~99%
+  native binaries R8 cannot touch.
 
-- **R8/ProGuard minification is disabled on purpose.** Tried twice. The
-  second attempt was isolated on a *native* x86_64 release so ARM
-  translation could not be blamed, with keep rules for `com.chaquo.**`,
-  `com.yausername.**` and Jackson: it still crashed, and the minified APK
-  was **larger** (64.7 MB vs 63.9 MB). youtubedl-android ships an
-  already-obfuscated Chaquopy, so R8 re-obfuscates classes its Python
-  bridge resolves by name; a keep rule would have to name those
-  obfuscated classes, which change with every library release. Since the
-  APK is ~99% native binaries R8 cannot touch, there is nothing to win.
+  An earlier version of this README blamed the emulator's ARM-translation
+  layer. That was wrong — the crash reproduced on a *native* x86_64
+  release build, which is what led to the real cause.
 - **16 KB page size (Android 15+)** alignment of the bundled native
   libraries has not been independently verified. (The other original open
   question — whether the bundled ffmpeg has an MP3 encoder — is settled:
@@ -382,5 +382,15 @@ tap-through). Before a release, walk through:
 Project audit → architecture/feasibility → UI skeleton → search → media
 details/format detection → local downloader → ffmpeg conversion/merging
 → download manager → background downloads → storage/history → player →
-settings → this README. Each step was verified against a running app
-before moving to the next, not just written and assumed correct.
+settings → performance → this README. Each step was verified against a
+running app before moving to the next, not just written and assumed
+correct.
+
+## Author
+
+Made by **Waqar Azeem** — [github.com/waqarazeem17](https://github.com/waqarazeem17)
+
+## License
+
+GPLv3, inherited from the extraction engine and ffmpeg build this app
+bundles. See [License note](#license-note).

@@ -206,6 +206,12 @@ class SettingsScreen extends StatelessWidget {
             onTap: () =>
                 showLicensePage(context: context, applicationName: 'FetchTube'),
           ),
+          ListTile(
+            title: const Text('Made by Waqar Azeem'),
+            subtitle: const Text('github.com/waqarazeem17'),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () => openUrl('https://github.com/waqarazeem17'),
+          ),
           const SizedBox(height: 24),
         ],
       ),

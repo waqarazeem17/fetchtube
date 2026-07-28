@@ -45,6 +45,10 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // Must be set explicitly: Flutter's Gradle plugin turns R8 on for release
+            // builds, and leaving it implicit was silently minifying and crashing.
+            isMinifyEnabled = false
+            isShrinkResources = false
             // Minification stays OFF. Tested twice, the second time carefully isolated
             // on a native x86_64 release (so ARM translation could not be blamed):
             //

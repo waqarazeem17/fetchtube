@@ -332,6 +332,10 @@ Future<bool> renameFile(String uri, String name) async =>
     await _channel.invokeMethod<bool>('rename', {'uri': uri, 'name': name}) ??
     false;
 
+/// Opens a web link in the user's browser.
+Future<void> openUrl(String url) =>
+    _channel.invokeMethod('openUrl', {'url': url});
+
 String formatBytes(int bytes) {
   if (bytes < 0) return '';
   const units = ['B', 'KB', 'MB', 'GB'];
