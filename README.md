@@ -52,9 +52,10 @@ established.
 - Multiple downloads: configurable **1–3 concurrent transfers**
   (Settings → Queue)
 - Wi-Fi only mode
-- Files land in `Download/FetchTube/Videos` or `Download/FetchTube/Music`,
-  visible to any file manager or other app — not hidden in app-private
-  storage
+- Files land in `Download/FetchTube/Video` or `Download/FetchTube/Audio`,
+  visible to any file manager — not hidden in app-private storage — and
+  registered with `MediaStore` so your music and gallery apps pick them
+  up automatically
 
 ### Library & history
 - Videos / Music tabs listing everything you've downloaded
@@ -137,7 +138,7 @@ Flutter UI  (search · details · downloads · player · settings)
 Kotlin  DownloadService (foreground)  ──▶  YoutubeDL.getInstance()
      │                                         └─ bundled python + yt-dlp + ffmpeg
      ▼
-MediaStore  →  Download/FetchTube/{Videos,Music}
+MediaStore  →  Download/FetchTube/{Video,Audio}
 ```
 
 No FastAPI, no Node.js, no Firebase, no database server, no external
@@ -196,9 +197,23 @@ sideloading or F-Droid, not the Play Store.
 
 ## History & storage
 
-Downloaded files are copied into `Download/FetchTube/Videos` or
-`Download/FetchTube/Music` via `MediaStore`, so they're visible to any
-other app on the device — not locked inside FetchTube's private storage.
+Downloads land in a plain `FetchTube` folder you can browse in any file
+manager:
+
+```
+Internal storage
+└── Download
+    └── FetchTube
+        ├── Video      video1.mp4, video2.mp4 …
+        └── Audio      song1.mp3, song2.m4a …
+```
+
+They are written through `MediaStore`, which both makes them visible to
+every other app and registers them with the system media index — so your
+music player lists the audio (verified: the entries appear in
+`MediaStore.Audio` with `is_music=1`) and your gallery lists the video,
+without any manual rescan.
+
 A companion JSON file (`history.json`, in app-private storage) remembers
 the title, thumbnail, quality, size, and original source URL for each
 download, purely for the app's own UI. **Clear history** in Settings

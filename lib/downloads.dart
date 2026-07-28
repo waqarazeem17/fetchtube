@@ -284,7 +284,7 @@ class _SavedTile extends StatelessWidget {
           if (e.quality != null) _row('Quality', e.quality!),
           if (e.bytes > 0) _row('Size', formatBytes(e.bytes)),
           _row('Saved', '${e.date}'.split('.').first),
-          _row('Folder', 'Download/FetchTube/${e.audio ? "Music" : "Videos"}'),
+          _row('Folder', 'Download/FetchTube/${e.audio ? "Audio" : "Video"}'),
         ],
       ),
       actions: [

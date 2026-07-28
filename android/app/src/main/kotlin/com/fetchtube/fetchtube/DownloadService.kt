@@ -215,12 +215,12 @@ class DownloadService : Service() {
     }
 
     /**
-     * Copies the finished file into Download/FetchTube/{Videos,Music} via MediaStore.
+     * Copies the finished file into Download/FetchTube/{Video,Audio} via MediaStore.
      * yt-dlp writes through raw paths, which scoped storage forbids in shared folders,
      * so it downloads to cache first and we hand the bytes to MediaStore here.
      */
     private fun publish(file: File, audio: Boolean): android.net.Uri {
-        val sub = if (audio) "Music" else "Videos"
+        val sub = if (audio) "Audio" else "Video"
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeOf(file.name))
